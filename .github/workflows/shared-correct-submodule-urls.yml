@@ -1,8 +1,10 @@
 # Shared workflow to correct submodule URLs in .gitmodules files across TS repos
 name: Correct .gitmodules paths
+
 on:
-  push:
-    branches: [ master ]
+  # Allows other workflows to trigger this workflow
+  workflow_call:
+
 jobs:
   modify-gitmodules:
     runs-on: ubuntu-22.04
@@ -16,6 +18,7 @@ jobs:
       
       - name: Correct .gitmodules paths
         shell: python
+        # Replace '../foo/bar/repo.git' type urls with '../repo.git'
         run: |
           with open(".gitmodules", "r") as f:
               lines = f.readlines()
@@ -38,6 +41,7 @@ jobs:
   commit-changes:
     runs-on: ubuntu-22.04
     needs: modify-gitmodules
+    # Do not run this job if the workflow was triggered by a workflow_run event
     if: ${{ github.event_name != 'workflow_run' }}
     steps:
       - name: Checkout repository
@@ -48,7 +52,6 @@ jobs:
         with:
           name: gitmodules
           path: ${{ github.workspace }}/artifacts
-          if-no-files-found: error
 
       - name: Commit and push 
         run: |

@@ -1,1 +1,1 @@
-# Reusable GitHub Actions workflow templates used across TropicSquare repositories.
+# Reusable GitHub Actions workflow templates used across TropicSquare repositories
