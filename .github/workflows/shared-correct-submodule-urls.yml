@@ -1,0 +1,60 @@
+# Shared workflow to correct submodule URLs in .gitmodules files across TS repos
+name: Correct .gitmodules paths
+on:
+  push:
+    branches: [ master ]
+jobs:
+  modify-gitmodules:
+    runs-on: ubuntu-22.04
+    container:
+      image: python:alpine
+      volumes:
+        - ${{ github.workspace }}/.gitmodules:/.gitmodules
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Correct .gitmodules paths
+        shell: python
+        run: |
+          with open(".gitmodules", "r") as f:
+              lines = f.readlines()
+
+          for i, line in enumerate(lines):
+              if line.strip().startswith("url ="):
+                  url = line.strip()[6:]
+                  repo_name = url.rstrip('/').split('/')[-1]
+                  lines[i] = f"\turl = ../{repo_name}\n"
+
+          with open(".gitmodules", "w") as f:
+              f.writelines(lines)
+
+      - name: Upload gitmodules artifact
+        uses: actions/upload-artifact@master
+        with:
+          name: gitmodules
+          path: ${{ github.workspace }}/.gitmodules
+
+  commit-changes:
+    runs-on: ubuntu-22.04
+    needs: modify-gitmodules
+    if: ${{ github.event_name != 'workflow_run' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download gitmodules artifact 
+        uses: actions/download-artifact@master
+        with:
+          name: gitmodules
+          path: ${{ github.workspace }}/artifacts
+          if-no-files-found: error
+
+      - name: Commit and push 
+        run: |
+          mv artifacts/.gitmodules .gitmodules
+          git config --global user.name "[bot]submodule-corrector"
+          git config --global user.email "[bot]submodule-corrector@users.noreply.github.com"
+          git add .gitmodules
+          git commit -m "Autocorrect submodule URLs"
+          git push origin master        
