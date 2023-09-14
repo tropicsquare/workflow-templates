@@ -1,94 +1,76 @@
-name: build-docs
+# Shared workflow to correct submodule URLs in .gitmodules files across TS repos
+name: Correct submodule URLs
 
 on:
-  workflow_run:
-    workflows: ['call-submodule-corrector']
-    branches: ['master']
-    types:
-      - completed
-
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+  # Allows other workflows to trigger this workflow
+  workflow_call:
 
 jobs:
-  build-docs:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+  modify-gitmodules:
     runs-on: ubuntu-22.04
+
     container:
-      image: ghcr.io/xu-cheng/texlive-full:latest
+      image: python:alpine
+      volumes:
+        - ${{ github.workspace }}/.gitmodules:/.gitmodules
 
     steps:
-      - name: Checkout current repository
+      - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Checkout ts-latex-lib
-        uses: actions/checkout@v3
-        with:
-          repository: 'tropicsquare/ts-latex-lib'
-          ref: 'refs/heads/master'
-          path: 'ts-latex-lib'
-          # TODO: replace personal token (go public)
-          token: ${{ secrets.PAT_SECRET }}
-
-      - name: Compile docs
-        id: compile-docs
+      
+      - name: Correct .gitmodules paths
+        shell: python
+        # Replaces '../foo/bar/repo.git' type urls with '../repo.git'
         run: |
-          cp -r ts-latex-lib /ts-latex-lib
-          cp -r doc /doc
+          with open(".gitmodules", "r") as f:
+              lines = f.readlines()
 
-          export TEXINPUTS=.:/ts-latex-lib//:
+          for i, line in enumerate(lines):
+              if line.strip().startswith("url ="):
+                  url = line.strip()[6:]
+                  repo_name = url.rstrip('/').split('/')[-1]
+                  lines[i] = f"\turl = ../{repo_name}\n"
 
-          chmod +x /ts-latex-lib/scripts/ts_latex_build.py
-          export PATH=$PATH:/ts-latex-lib/scripts/
+          with open(".gitmodules", "w") as f:
+              f.writelines(lines)
 
-          cd /doc/programmer_guide
-          ts_latex_build.py spect_programmer_guide.tex
-
-          cd /doc/ISAv0.1
-          ts_latex_build.py isav0.1.tex
-
-          cd /doc/ISAv0.2
-          ts_latex_build.py isav0.2.tex
-
-      - name: Upload PDF artifacts
+      - name: Upload gitmodules artifact
         uses: actions/upload-artifact@v3
         with:
-          name: SPECT_documentation
-          path: |
-            /doc/programmer_guide/build/pdf/spect_programmer_guide.pdf
-            /doc/ISAv0.1/build/pdf/isav0.1.pdf
-            /doc/ISAv0.2/build/pdf/isav0.2.pdf
-          retention-days: 2
+          name: gitmodules
+          path: ${{ github.workspace }}/.gitmodules
 
-  push-docs:
+  commit-changes:
     runs-on: ubuntu-22.04
-    needs: build-docs
+    needs: [modify-gitmodules]
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Download documentation artifact
+      - name: Download gitmodules artifact 
         uses: actions/download-artifact@v3
         with:
-          name: SPECT_documentation
+          name: gitmodules
           path: ${{ github.workspace }}/artifacts
 
-      - name: Commit and push
+      - name: Check if nothing to commit
+        id: check-diff
         run: |
-          mkdir -p doc/programmer_guide/pdf
-          mv ${{ github.workspace }}/artifacts/programmer_guide/build/pdf/spect_programmer_guide.pdf doc/programmer_guide/pdf/
+          mv artifacts/.gitmodules .gitmodules
+          git diff --quiet .gitmodules || echo "::set-output name=changes::true"
 
-          mkdir -p doc/ISAv0.1/pdf
-          mv ${{ github.workspace }}/artifacts/ISAv0.1/build/pdf/isav0.1.pdf doc/ISAv0.1/pdf/
-
-          mkdir -p doc/ISAv0.2/pdf
-          mv ${{ github.workspace }}/artifacts/ISAv0.2/build/pdf/isav0.2.pdf doc/ISAv0.2/pdf/
-
-          git config --global user.name "[bot]upload-docs"
-          git config --global user.email "[bot]upload-docs@users.noreply.github.com"
-          git status
-          git add doc/programmer_guide/pdf/spect_programmer_guide.pdf
-          git add doc/ISAv0.1/pdf/isav0.1.pdf
-          git add doc/ISAv0.2/pdf/isav0.2.pdf
-          git commit -m "Autogenerate PDFs"
+      - name: Commit and push
+        if: steps.check-diff.outputs.changes == 'true'
+        run: |
+          mv artifacts/.gitmodules .gitmodules
+          git config --global user.name "[bot]submodule-corrector"
+          git config --global user.email "[bot]submodule-corrector@users.noreply.github.com"
+          git add .gitmodules
+          git commit -m "Autocorrect submodule URLs"
           git push origin master
+
+      - name: Delete artifacts
+        uses: geekyeggo/delete-artifact@v2
+        with:
+          name: gitmodules
